@@ -11,16 +11,27 @@ Requirement
 RiskAnalyzer port --> RiskAssessment
         |
         v
-Typed TestPlan (future untrusted producer)
+Typed TestPlan (untrusted producer arrives in PR #3)
         |
 ==== TRUST BOUNDARY ====
         |
         v
-Domain invariants + ScenarioPolicy
+ExecuteTestPlan --> ScenarioPolicy
         |
-        +---- BLOCK --> PolicyDecision with violations
+        +---- BLOCK --> Outcome.BLOCKED (executor never called)
         |
-        +---- ALLOW --> Deterministic executor (PR #2)
+        +---- ALLOW --> ScenarioExecutor port
+                              |
+                              v
+                 PlaywrightScenarioExecutor (fresh browser per scenario)
+                              |
+                 deterministic oracles + screenshot, trace, console
+                              |
+                              v
+                 EvidenceVerifier (SHA-256, path-confined store)
+                              |
+                              v
+                 RunResult --> run-result.json
 ```
 
 ## Dependency rule
@@ -31,7 +42,7 @@ Dependencies point inward:
 interfaces/composition -> infrastructure -> application -> domain
 ```
 
-`domain/` has no dependency on browser, provider, filesystem, HTTP, database, or CI SDKs. A test parses every domain module and fails if it imports an outer layer or a named vendor SDK.
+`domain/` has no dependency on browser, provider, filesystem, HTTP, database, or CI SDKs. Tests parse every module in `domain/` and `application/` and fail if they import an outer layer or a named vendor SDK.
 
 ## Implemented layers
 
@@ -46,27 +57,44 @@ The policy fails closed for the following conditions:
 - navigation is not an absolute HTTP(S) URL, contains credentials, or targets a host outside the allowlist;
 - scenario steps exceed the action budget.
 
-`max_duration_seconds` is part of the immutable execution contract. Enforcing elapsed time requires an executor and is therefore introduced with the deterministic execution adapter in PR #2.
+`ExecutionConstraints` (allowed hosts plus budget) is derived from the policy and passed to the executor, so the same limits are enforced again at runtime rather than only before execution.
+
+`ScenarioResult` enforces what a trustworthy result must look like: a pass needs a deterministic verdict and evidence, a failed deterministic verdict cannot be overridden, and every non-pass carries a reason.
 
 ### Application
 
-The application contains the `RiskAnalyzer` protocol and `AssessRequirementRisk` use case. The use case accepts a `Requirement` and returns an immutable `RiskAssessment`; it has no knowledge of agents, browser automation, or persistence.
+- `RiskAnalyzer`, `ScenarioExecutor`, and `EvidenceVerifier` protocols.
+- `AssessRequirementRisk` returns an immutable `RiskAssessment`.
+- `ExecuteTestPlan` evaluates policy per scenario, calls the executor only for allowed scenarios, converts executor exceptions and mismatched results into `Outcome.ERROR`, and downgrades a result whose evidence fails verification.
+
+### Infrastructure
+
+- `PlaywrightScenarioExecutor`: a new browser and context per scenario. Isolation is preferred over speed; pooling is a PR #4 concern.
+- `FilesystemEvidenceStore`: confines every path to its root, validates identifiers, and binds each reference to a SHA-256 digest.
+- `JsonRunResultWriter`: writes a versioned `run-result.json`.
+
+### Runtime egress control
+
+Chromium is launched with `--host-resolver-rules` so every host outside the allowlist fails to resolve, including redirect hops. A context-level route additionally aborts non-allowlisted requests and records them. Any recorded block fails the scenario, because a page reaching for an unapproved host is a finding, not noise. Every WebSocket is routed but never connected, so no socket can leave the browser, and it is recorded as blocked.
+
+Sync Playwright calls inside a route handler deadlock the dispatcher, so handlers only record and the executor reads the record between steps.
+
+The duration budget bounds step timeouts and the final screenshot. A scenario that times out mid-navigation keeps its trace and console evidence but may have no screenshot.
 
 ## Oracle model
 
-The first PR establishes the contract, not an oracle provider. `OracleVerdict` distinguishes deterministic and semantic results:
+`OracleVerdict` distinguishes deterministic and semantic results:
 
 - deterministic verdicts have confidence `1.0`;
 - semantic verdicts must include confidence and evidence provenance;
-- the types are separate, so semantic output cannot silently overwrite a deterministic failure.
+- `ScenarioResult` rejects a pass that contradicts a failed deterministic verdict.
 
-PR #2 will add deterministic browser assertions and evidence. A semantic-oracle adapter belongs behind an application port introduced only when it has a concrete consumer.
+Deterministic oracles (HTTP status, visibility, text containment) live in `domain/oracle.py` as pure functions over observations, so they are testable without a browser. No semantic oracle exists yet; one belongs behind an application port introduced only when it has a concrete consumer.
 
 ## Planned extension points
 
 | PR | Capability | Boundary |
 |---|---|---|
-| #2 | Browser execution, evidence manifests, deterministic oracle | Infrastructure implementation of an application executor port |
 | #3 | Guarded provider-neutral planning | Infrastructure implementation of a planning port; parser and policy validation before execution |
 | #4 | Bounded workers and telemetry | Application coordination with infrastructure trace sink |
 | #5 | Seeded-defect benchmark and quality gate | Stable machine-readable result contract |
