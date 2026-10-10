@@ -3,11 +3,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-_DOMAIN_DIRECTORY = Path(__file__).parents[2] / "src" / "agentic_qa" / "domain"
-_FORBIDDEN_IMPORT_PREFIXES = (
-    "agentic_qa.application",
-    "agentic_qa.infrastructure",
-    "agentic_qa.interfaces",
+import pytest
+
+_PACKAGE = Path(__file__).parents[2] / "src" / "agentic_qa"
+_VENDOR_SDKS = (
     "anthropic",
     "boto3",
     "github",
@@ -17,6 +16,10 @@ _FORBIDDEN_IMPORT_PREFIXES = (
     "requests",
     "sqlalchemy",
 )
+_OUTER_LAYERS = {
+    "domain": ("agentic_qa.application", "agentic_qa.infrastructure", "agentic_qa.interfaces"),
+    "application": ("agentic_qa.infrastructure", "agentic_qa.interfaces"),
+}
 
 
 def _imported_modules(source_path: Path) -> set[str]:
@@ -30,13 +33,31 @@ def _imported_modules(source_path: Path) -> set[str]:
     return modules
 
 
-def test_domain_does_not_depend_on_outer_layers_or_vendor_sdks() -> None:
-    imported_modules = set().union(
-        *(_imported_modules(source_path) for source_path in _DOMAIN_DIRECTORY.glob("*.py"))
-    )
+@pytest.mark.parametrize("layer", ["domain", "application"])
+def test_inner_layers_do_not_depend_on_outer_layers_or_vendor_sdks(layer: str) -> None:
+    forbidden = (*_OUTER_LAYERS[layer], *_VENDOR_SDKS)
+    sources = list((_PACKAGE / layer).rglob("*.py"))
 
-    forbidden_modules = {
-        module for module in imported_modules if module.startswith(_FORBIDDEN_IMPORT_PREFIXES)
+    violations = {
+        f"{source.relative_to(_PACKAGE)} imports {module}"
+        for source in sources
+        for module in _imported_modules(source)
+        if module.startswith(forbidden)
     }
 
-    assert not forbidden_modules
+    assert sources
+    assert not violations
+
+
+def test_domain_does_not_touch_the_filesystem_or_network() -> None:
+    forbidden = ("pathlib", "socket", "subprocess", "shutil", "os", "urllib.request")
+    sources = list((_PACKAGE / "domain").rglob("*.py"))
+
+    violations = {
+        f"{source.name} imports {module}"
+        for source in sources
+        for module in _imported_modules(source)
+        if module in forbidden
+    }
+
+    assert not violations

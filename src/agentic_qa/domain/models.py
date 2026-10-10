@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from urllib.parse import urlparse
+
+_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 
 
 class RiskLevel(StrEnum):
@@ -23,6 +26,17 @@ class Action(StrEnum):
 class OracleKind(StrEnum):
     DETERMINISTIC = "deterministic"
     SEMANTIC = "semantic"
+
+
+class Outcome(StrEnum):
+    PASSED = "passed"
+    FAILED = "failed"
+    BLOCKED = "blocked"
+    ERROR = "error"
+
+
+def is_safe_identifier(value: str) -> bool:
+    return _IDENTIFIER.fullmatch(value) is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,8 +93,10 @@ class TestScenario:
     acceptance_criteria: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if not self.scenario_id.strip() or not self.title.strip():
-            raise ValueError("scenario id and title must not be blank")
+        if not is_safe_identifier(self.scenario_id):
+            raise ValueError("scenario id must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+        if not self.title.strip():
+            raise ValueError("scenario title must not be blank")
         if not self.steps:
             raise ValueError("scenario must contain at least one step")
         if any(not criterion.strip() for criterion in self.acceptance_criteria):
@@ -116,6 +132,14 @@ class ExecutionBudget:
 
 
 @dataclass(frozen=True, slots=True)
+class ExecutionConstraints:
+    """Limits an executor must enforce at runtime, not only before it starts."""
+
+    allowed_hosts: frozenset[str]
+    budget: ExecutionBudget
+
+
+@dataclass(frozen=True, slots=True)
 class EvidenceReference:
     kind: str
     location: str
@@ -139,14 +163,79 @@ class OracleVerdict:
     actual: str
     confidence: float = 1.0
     provenance: tuple[EvidenceReference, ...] = ()
+    step_index: int | None = None
 
     def __post_init__(self) -> None:
+        if self.step_index is not None and self.step_index < 0:
+            raise ValueError("step_index must be non-negative")
         if not 0 <= self.confidence <= 1:
             raise ValueError("confidence must be between 0 and 1")
         if self.oracle is OracleKind.DETERMINISTIC and self.confidence != 1.0:
             raise ValueError("deterministic oracle confidence must be 1.0")
         if self.oracle is OracleKind.SEMANTIC and not self.provenance:
             raise ValueError("semantic oracle verdicts require provenance")
+
+
+@dataclass(frozen=True, slots=True)
+class ScenarioResult:
+    scenario_id: str
+    outcome: Outcome
+    duration_ms: int
+    evidence: tuple[EvidenceReference, ...] = ()
+    verdicts: tuple[OracleVerdict, ...] = ()
+    failure_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if not is_safe_identifier(self.scenario_id):
+            raise ValueError("result scenario id is not a valid identifier")
+        if self.duration_ms < 0:
+            raise ValueError("duration_ms must be non-negative")
+        deterministic = tuple(v for v in self.verdicts if v.oracle is OracleKind.DETERMINISTIC)
+        has_failed_deterministic = any(not v.passed for v in deterministic)
+        if self.outcome is Outcome.PASSED:
+            if self.failure_reason is not None:
+                raise ValueError("passed results cannot carry a failure reason")
+            if not deterministic:
+                raise ValueError("passed results require a deterministic verdict")
+            if has_failed_deterministic:
+                raise ValueError("a failed deterministic verdict cannot be overridden")
+            if not self.evidence:
+                raise ValueError("passed results require evidence")
+        elif not (self.failure_reason or "").strip():
+            raise ValueError(f"{self.outcome.value} results require a failure reason")
+        if self.outcome is Outcome.FAILED and not self.evidence:
+            raise ValueError("failed results require evidence")
+
+
+@dataclass(frozen=True, slots=True)
+class RunResult:
+    """Stable, machine-readable outcome of executing one plan."""
+
+    run_id: str
+    requirement_id: str
+    results: tuple[ScenarioResult, ...]
+    duration_ms: int
+
+    def __post_init__(self) -> None:
+        if not is_safe_identifier(self.run_id):
+            raise ValueError("run id is not a valid identifier")
+        if not self.requirement_id.strip():
+            raise ValueError("run requirement_id must not be blank")
+        if not self.results:
+            raise ValueError("run must contain scenario results")
+        scenario_ids = tuple(result.scenario_id for result in self.results)
+        if len(set(scenario_ids)) != len(scenario_ids):
+            raise ValueError("run scenario results must be unique")
+        if self.duration_ms < 0:
+            raise ValueError("duration_ms must be non-negative")
+
+    @property
+    def outcome(self) -> Outcome:
+        present = {result.outcome for result in self.results}
+        for outcome in (Outcome.ERROR, Outcome.FAILED, Outcome.BLOCKED):
+            if outcome in present:
+                return outcome
+        return Outcome.PASSED
 
 
 @dataclass(frozen=True, slots=True)

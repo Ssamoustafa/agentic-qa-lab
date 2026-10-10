@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 from agentic_qa.domain.models import (
     Action,
     ExecutionBudget,
+    ExecutionConstraints,
     PolicyDecision,
     PolicyViolation,
     RiskLevel,
@@ -27,6 +28,10 @@ class ScenarioPolicy:
     allowed_actions: frozenset[Action]
     budget: ExecutionBudget
     maximum_risk_level: RiskLevel = RiskLevel.CRITICAL
+
+    @property
+    def constraints(self) -> ExecutionConstraints:
+        return ExecutionConstraints(self.allowed_hosts, self.budget)
 
     def evaluate(self, scenario: TestScenario) -> PolicyDecision:
         violations: list[PolicyViolation] = []

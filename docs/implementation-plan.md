@@ -12,7 +12,7 @@ This PR does not execute a browser, call a model, write evidence, coordinate wor
 
 ### PR #2: `feat: implement evidence-driven execution`
 
-Add a Playwright executor behind an application port, isolated browser contexts, navigation/click/fill/assertion support, deterministic verdicts, screenshots, traces, manifests, duration enforcement, and cleanup guarantees.
+Status: implemented. Add a Playwright executor behind an application port, isolated browser contexts, navigation/click/fill/assertion support, deterministic verdicts, screenshots, traces, manifests, duration enforcement, and cleanup guarantees.
 
 ## Phase 2: Agentic Intelligence
 

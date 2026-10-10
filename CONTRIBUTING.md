@@ -12,6 +12,7 @@ pytest
 ```
 
 `pytest` enforces the repository coverage threshold configured in `pyproject.toml`.
+Browser tests need `pip install -e ".[dev,browser]"` and `python -m playwright install chromium`.
 
 Architecture rules:
 1. Domain code must not import browser, AI-provider, filesystem, or CI SDKs.
