@@ -18,12 +18,14 @@ dev = [
   "pytest-cov>=6.0",
   "ruff>=0.8",
 ]
+browser = ["playwright>=1.49"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["browser: requires Playwright and an installed Chromium"]
 addopts = "-q --strict-markers --cov=agentic_qa --cov-report=term-missing --cov-fail-under=85"
 
 [tool.ruff]
